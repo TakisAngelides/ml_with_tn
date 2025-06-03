@@ -1,0 +1,6 @@
+*.vscode
+sketching
+*qc*
+*supervised*
+tci_old
+mnist
