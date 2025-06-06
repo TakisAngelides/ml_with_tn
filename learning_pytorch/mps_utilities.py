@@ -191,7 +191,7 @@ class MPS:
         
         return [self._get_site_canonical_form(site) for site in self.tensors]
     
-    def contract_with_mpo(self, mpo, tol = 1e-14, maxD = np.infty, compress = False):
+    def contract_with_mpo(self, mpo, tol = 1e-14, maxD = np.inf, compress = False):
         
         n = self.n
         d = self.d
@@ -559,7 +559,7 @@ def get_linkdims(tensors):
             
         return [1] + linkdims + [1]
 
-def add_mps(mps1, mps2, tol = 1e-14, maxD = np.infty, compress = False, normalize = False):
+def add_mps(mps1, mps2, tol = 1e-14, maxD = np.inf, compress = False, normalize = False):
         
         n = mps1.n
         d = mps1.d
@@ -633,17 +633,3 @@ def add_mpo(mpo1, mpo2):
 
     return MPO(n = n, d = 2, tensors = res)           
 
-
-# Example MPS
-n = 5
-d = 2
-linkdims = [1] + [1 for _ in range(n-1)] + [1]
-mps = MPS(n, d, linkdims)
-
-# Example MPO for Ising model
-mpo = get_ising_mpo(n = n, J = 1.0, gx = 0.5, gz = 0.1)
-
-dmrg = DMRG(mpo, mps, etol = 1e-8, tol = 1e-8, maxD = 40, verbose = False)
-E, gs = dmrg.run()
-    
-print(E, gs) 
