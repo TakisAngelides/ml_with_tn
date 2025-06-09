@@ -1,5 +1,6 @@
 import torch
 from collections.abc import Iterable 
+import numpy as np
 
 """ A module for the function ncon, which does contractions of several tensors.
 """
