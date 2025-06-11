@@ -58,6 +58,7 @@ class Tensor():
         
         idx_str = ", ".join(repr(idx) for idx in self.indices)
         return f"Tensor(shape={tuple(self.data.shape)}, indices=[{idx_str}])"
+
 class Node():
     
     def __init__(self, tensor : Tensor, parents = None, children = None, name = None, layer = None):
@@ -173,7 +174,6 @@ class Node():
     
         return node_primed_bonds
         
-                  
 class TTN():
     
     def __init__(self, nodes = None):
@@ -397,8 +397,6 @@ class TTN():
 
         return prev_res_layer[0]  # the final node from the top contraction
 
-        
-        
 def random_binary_ttn_old(depth, D, d) -> TTN:
     
     """
@@ -542,105 +540,3 @@ def random_binary_ttn(N, d, D, physical_indices=None):
         current_nodes = next_nodes
 
     return TTN(nodes=nodes)
-
-
-depth = 3
-N = 2**depth
-d = 2
-ttn1 = random_binary_ttn(N = N, D = 3, d = d).canonicalize(normalize = False)
-ttn2 = random_binary_ttn(N = N, D = 3, d = d, physical_indices = ttn1.get_physical_indices()).canonicalize(normalize = True)
-
-print(ttn1.norm().item())
-
-res = ttn1.contract(ttn1).tensor.data.item()
-print(res)
-
-# # print(ttn)
-# # print(ttn)
-# res = ttn.norm().item()
-# print(res)
-# ttn.canonicalize(normalize = False)
-# # print(ttn)
-# # ttn.visualize()
-# # print('*************')
-
-# # print(ttn.nodes[-1].tensor.data)
-
-# # print(ttn)
-# res = ttn.norm().item()
-# print(res)
-# ttn.canonicalize(normalize = False)
-# # print(ttn)
-# res = ttn.norm().item()
-# print(res)
-# ttn.visualize()
-
-# print(ttn.nodes[-1].tensor.data)
-
-# layer_dict = {}
-# for node in ttn.nodes:
-#     layer_dict.setdefault(node.layer, []).append(node)
-    
-# n = layer_dict[1][1]
-# # t = n.tensor.data
-# tensor = n.tensor
-# data = tensor.data
-# # t_conj = torch.conj(t)
-
-# # print(n.tensor)
-
-# # res = torch.tensordot(t, t_conj, [[0, 1], [0, 1]])
-# # print(torch.dist(torch.eye(res.shape[0]), res))
-# # print(torch.sqrt(res))
-
-# top_idx = next(idx for idx in tensor.indices if idx in n.parents[0].tensor.indices)
-# bottom_idx_list = [idx for idx in tensor.indices if idx != top_idx]
-
-# # QR decomposition: reshape -> QR -> reshape
-# matrix = data.reshape(-1, top_idx.dim)
-# Q, R = qr(matrix)
-# k = Q.shape[1]
-# new_bond = Index(k, name = top_idx.name)
-# Q_tensor = Q.reshape(*[element.dim for element in bottom_idx_list], k)
-
-# print('you enjoy that ye')
-# print(data)
-# print(Q_tensor)
-# print(torch.dist(data, Q_tensor))
-
-# print(R)
-
-# n1 = Index(3, name = "bond_0")
-# n2 = Index(2, name = "bond_1")
-# n3 = Index(2, name = "phys_0")
-
-# t = Tensor([n1, n2, n3])
-
-# n1 = Node(t, [], [], "0", 0)
-
-# n2 = n1.dagger()
-
-# print(n1)
-
-# print(n2)
-
-# n1 = Index(2, name = "bond_0")
-# n2 = Index(3, name = "bond_1")
-# n3 = Index(4, name = "bond_2")
-# n4 = Index(5, name = "bond_3")
-
-# n5 = Index(6, name = "bond_4")
-# n6 = Index(7, name = "bond_5")
-
-# node1 = Node(Tensor([n1, n2, n3, n4]))
-# node2 = Node(Tensor([n5, n1, n6, n2]))
-
-# node3 = node1.contract(node2)
-
-# print(node3.tensor.indices)
-
-# node4 = node2.contract(node1)
-
-# print(node4.tensor.indices)
-
-
