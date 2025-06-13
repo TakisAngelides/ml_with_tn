@@ -312,6 +312,16 @@ class MPS:
 
         return mpo
 
+    def to_list(self):
+        
+        n, d = self.n, self.d
+                     
+        res = self.tensors[0]
+        for i in range(1, n):
+            res = torch.tensordot(res, self.tensors[i], [[-2], [0]])
+            
+        return res.reshape(d**n).tolist()
+
 class MPO:
     
     def __init__(self, n: int, d: int, builder_fn: Optional[Callable[[int], List[torch.Tensor]]] = None, tensors: Optional[List[torch.Tensor]] = None):

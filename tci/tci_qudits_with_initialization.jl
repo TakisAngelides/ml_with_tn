@@ -668,7 +668,7 @@ end
 let
 
 # Define parameters and perform TCI
-N = 20
+N = 8
 d = 2
 min_grid = -10
 max_grid = 10
