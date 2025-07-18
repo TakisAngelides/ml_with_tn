@@ -5,6 +5,9 @@ import warnings
 from TorNcon import ncon
 from torch.linalg import qr
 import numpy as np
+from typing import List, Optional, Callable
+from collections import deque
+torch.manual_seed(42)
 
 class Index():
     
@@ -35,6 +38,10 @@ class Index():
     def copy(self, name = None, id_num = None):
         
         return Index(self.dim, name = name, id_num = id_num)
+    
+    def prime(self):
+        
+        return Index(self.dim, name = self.name + "'", id_num = self.id)
 
 class Tensor():
     
@@ -153,6 +160,27 @@ class Node():
     
         return node_dagger
     
+    def unprime_physical(self):
+        
+        tensor = self.tensor
+        indices = tensor.indices
+        data = tensor.data
+        
+        new_indices = []
+        for idx in indices:
+            
+            if "phys" in idx.name and idx.name[-1] == "'":
+                new_idx = idx.copy(name = idx.name[:-1], id_num = idx.id)
+                new_indices.append(new_idx)
+            else:
+                new_indices.append(idx)
+        
+        new_tensor = Tensor(new_indices, data)
+                                
+        res = Node(new_tensor, self.parents, self.children, self.name, self.layer)
+                
+        return res
+    
     def prime_bonds(self):
         
         tensor = self.tensor
@@ -264,65 +292,98 @@ class TTN():
                     seen.add(idx)
         return phys_indices
    
-    def canonicalize(self, normalize = False):
+    def canonicalize(self, target_layer = None, target_node_idx = 0, normalize=False):
 
         # Group nodes by layer
         layer_dict = {}
         for node in self.nodes:
             layer_dict.setdefault(node.layer, []).append(node)
-            
-        max_layer = max(layer_dict.keys())
-        
-        for layer in range(max_layer + 1):
-                                                            
-            for node in layer_dict[layer]:
-                                                                                                                
-                tensor = node.tensor
-                data = tensor.data
                 
-                if node.parents:
-                    
-                    parent = node.parents[0]
-                    
-                    top_idx = next(idx for idx in tensor.indices if idx in node.parents[0].tensor.indices)
-                    bottom_idx_list = [idx for idx in tensor.indices if idx != top_idx]
-                    
-                    # QR decomposition: reshape -> QR -> reshape
-                    matrix = data.reshape(-1, top_idx.dim)
-                    Q, R = qr(matrix)
+        max_layer = max(layer_dict.keys())
+        if target_layer == None:
+            target_layer = max_layer     
+
+        # Select target node
+        target_node = layer_dict[target_layer % (max_layer+1)][target_node_idx % len(layer_dict[target_layer % (max_layer+1)])]
+        
+        # Compute distances to target node using BFS
+        distances = {}
+        queue = deque([(target_node, 0)])
+        visited = set()
+        
+        while queue:
                         
-                    # New bond dimension after QR
-                    k = Q.shape[1]
-                    new_bond = Index(k, name = top_idx.name)
-                    Q_tensor = Q.reshape(*[element.dim for element in bottom_idx_list], k)
+            current_node, dist = queue.popleft()
+            if current_node in visited:
+                continue
+            visited.add(current_node)
+            distances[current_node] = dist
 
-                    # Replace current node's tensor with Q
-                    node.tensor = Tensor(bottom_idx_list + [new_bond], Q_tensor)
-
-                    # Build R tensor and contract it into parent (always, even for root)
-                    R_tensor = Tensor([new_bond, top_idx], R)
-                    R_node = Node(R_tensor)
-                                    
-                    # new_parent = parent.contract(R_node) # TODO: understand why this instead of the line below changes the norm
-                    new_parent = R_node.contract(parent)
-                    parent.tensor = new_parent.tensor # Replace parent’s tensor with contracted result
+            # Add neighbors
+            for parent in getattr(current_node, "parents", []):
+                if parent not in visited:
+                    queue.append((parent, dist+1))
+            for child in getattr(current_node, "children", []):
+                if child not in visited:
+                    queue.append((child, dist+1))
                     
-                elif normalize: # case of the root node
-                                        
-                    bottom_idx_list = tensor.indices
+        # Sort nodes by distance (descending)
+        sorted_nodes = sorted(distances.items(), key=lambda x: -x[1])
+        
+        for node, dist in sorted_nodes:
+            tensor = node.tensor
+            data = tensor.data
 
-                    # QR decomposition: reshape -> QR -> reshape
+            if node == target_node: # Special case for target node
+                if normalize:
+                    bottom_idx_list = tensor.indices
                     matrix = data.reshape(-1, 1)
                     Q, R = qr(matrix)
-
-                    # New bond dimension after QR
                     Q_tensor = Q.reshape(*[element.dim for element in bottom_idx_list])
-
-                    # Replace current node's tensor with Q
                     node.tensor = Tensor(bottom_idx_list, Q_tensor)
-                    
-        return self
-                  
+                continue
+
+            # Determine contraction direction (move R towards parent or child)
+            if node.parents and distances.get(node.parents[0], float('inf')) < dist: # do I have a parent and is my parent closer to the target?
+                # Contract into parent
+                parent = node.parents[0]
+                top_idx = next(idx for idx in tensor.indices if idx in parent.tensor.indices)
+                bottom_idx_list = [idx for idx in tensor.indices if idx != top_idx]
+
+                matrix = data.reshape(-1, top_idx.dim)
+                Q, R = qr(matrix)
+
+                k = Q.shape[1]
+                new_bond = Index(k, name=top_idx.name)
+                Q_tensor = Q.reshape(*[element.dim for element in bottom_idx_list], k)
+                node.tensor = Tensor(bottom_idx_list + [new_bond], Q_tensor)
+
+                R_tensor = Tensor([new_bond, top_idx], R)
+                R_node = Node(R_tensor)
+                new_parent = R_node.contract(parent)
+                parent.tensor = new_parent.tensor
+
+            elif getattr(node, "children", []) and distances.get(node.children[0], float('inf')) < dist:
+                # Contract into child
+                child = node.children[0]
+                top_idx = next(idx for idx in tensor.indices if idx in child.tensor.indices)
+                bottom_idx_list = [idx for idx in tensor.indices if idx != top_idx]
+
+                matrix = data.reshape(-1, top_idx.dim)
+                Q, R = qr(matrix)
+
+                k = Q.shape[1]
+                new_bond = Index(k, name=top_idx.name)
+                Q_tensor = Q.reshape(*[element.dim for element in bottom_idx_list], k)
+                node.tensor = Tensor(bottom_idx_list + [new_bond], Q_tensor)
+
+                R_tensor = Tensor([new_bond, top_idx], R)
+                R_node = Node(R_tensor)
+                new_child = R_node.contract(child)
+                child.tensor = new_child.tensor
+
+        return self              
+
     def norm(self):
         
         # Group nodes by layer
@@ -355,7 +416,7 @@ class TTN():
                 
             prev_res_layer = res_layer      
             
-        return torch.sqrt(prev_res_layer[0].tensor.data)
+        return torch.sqrt(prev_res_layer[0].tensor.data).item()
     
     def contract(self, ttn2):
         
@@ -395,92 +456,293 @@ class TTN():
 
             prev_res_layer = res_layer
 
-        return prev_res_layer[0]  # the final node from the top contraction
+        return prev_res_layer[0].tensor.data.item()  # the final node from the top contraction
 
-def random_binary_ttn_old(depth, D, d) -> TTN:
-    
-    """
-    Builds a perfect binary-tree tensor network of given `depth`.
-    - depth: number of layers (leaves are at layer 0; root is at layer depth-1)
-    - D: bond dimension for all internal bonds
-    - d: physical dimension (only leaves have two physical indices of dimension d)
-    
-    Notes:
-    
-    Leaves are at the bottom (depth = 0),
-    Internal nodes are in the middle (depth = 1 to depth-2),
-    Root is at the top (depth = depth - 1).
-    
-    Returns a TTN object whose `nodes` list contains all Node instances.
-    """
-    
-    nodes = []
-    site_counter = [0]
-
-    # Edge case: depth must be at least 1
-    if depth < 1:
-        raise ValueError("Depth must be >= 1.")
-
-    # Special case: depth == 1 → single leaf node (also the root)
-    if depth == 1:
+    def expectation_value(self, mpo):
         
-        phys_idx_left  = Index(d, name=f"phys_{2*site_counter[0]}")
-        phys_idx_right = Index(d, name=f"phys_{2*site_counter[0]+1}")
-        tensor = Tensor([phys_idx_left, phys_idx_right])
-        root_node = Node(tensor, parents=[], children=[], name = len(nodes), layer = 0)
-        nodes.append(root_node)
-        return TTN(nodes)
-
-    def build_subtree(layer):
+        # Group nodes by layer
+        layer_dict = {}
+        for node in self.nodes:
+            layer_dict.setdefault(node.layer, []).append(node)
+            
+        prev_res_layer = []
+        layer = 0 
+                    
+        for i, node in enumerate(layer_dict[layer]):
                         
-        """
-        Recursively build a subtree rooted at the specified layer.
-        
-        Note: This internal helper recursively constructs the binary tree starting from the leaves (layer = 0) up to the root.
-        
-        """
-        
-        if layer == 0: # case of leafs
+            node_dag = node.dagger()
+                        
+            prev_res_layer.append(node.contract(mpo[2*i].contract(mpo[2*i+1])).unprime_physical().contract(node_dag))
+                        
+        for layer in range(1, max(layer_dict.keys()) + 1):
             
-            phys_idx_left  = Index(d, name=f"phys_{2*site_counter[0]}")
-            phys_idx_right = Index(d, name=f"phys_{2*site_counter[0]+1}")
-            site_counter[0] += 1
-            bond_idx = Index(np.random.randint(1, 10), name=f"bond_{len(nodes)}") # TODO: replace np.random.randint(1, 10) with D after testing is finished
-            tensor = Tensor([phys_idx_left, phys_idx_right, bond_idx])
-            leaf_node = Node(tensor, name = len(nodes), layer = layer)
-            nodes.append(leaf_node)
+            res_layer = []
             
-            return leaf_node, bond_idx
-
-        left_node, left_bond_idx = build_subtree(layer - 1)
-        right_node, right_bond_idx = build_subtree(layer - 1)
-
-        if layer == depth - 1: # case of root node (stopping condition of recursion)
-            
-            tensor = Tensor([left_bond_idx, right_bond_idx])
-            root_node = Node(tensor, parents=[], children=[left_node, right_node], name = len(nodes), layer = layer)
-            left_node.parents.append(root_node)
-            right_node.parents.append(root_node)
-            nodes.append(root_node)
-            return root_node, None
-        
-        else:
-            
-            parent_bond_idx = Index(np.random.randint(1, 10), name=f"bond_{len(nodes)}") # TODO: replace np.random.randint(1, 10) with D after testing is finished
-            tensor = Tensor([left_bond_idx, right_bond_idx, parent_bond_idx])
-            int_node = Node(tensor, parents=[], children=[left_node, right_node], name = len(nodes), layer = layer)
-            left_node.parents.append(int_node)
-            right_node.parents.append(int_node)
-            nodes.append(int_node)
-            
-            return int_node, parent_bond_idx
-
-    # Build full TTN
-    _, _ = build_subtree(depth - 1)
+            for i, node in enumerate(layer_dict[layer]):    
+                
+                left, right = prev_res_layer[2*i], prev_res_layer[2*i+1]
+                top, bottom = node, node.dagger()
+                
+                tmp = top.contract(left)                
+                tmp = tmp.contract(right)
+                tmp = tmp.contract(bottom)
+                res_layer.append(tmp)
+                
+            prev_res_layer = res_layer      
+                        
+        return prev_res_layer[0].tensor.data.item()/self.contract(self)
     
-    return TTN(nodes)
+class MPO():
+    
+    def __init__(self, n: int, d: int, builder_fn: Optional[Callable[[int], List[Tensor]]] = None, nodes: Optional[List[Node]] = None):
+        """
+        Matrix Product Operator (MPO) class using Nodes and Tensors.
+        """
+        self.n = n
+        self.d = d
+        
+        if nodes is not None:
+            self.nodes = nodes
+        elif builder_fn is not None:
+            tensors = builder_fn(n)
+            self.nodes = [Node(tensor) for tensor in tensors]
+        else:
+            raise ValueError("Either builder_fn or nodes must be provided.")
 
-def random_binary_ttn(N, d, D, physical_indices=None):
+    def __repr__(self):
+        nodes_str = "\n".join([repr(node.tensor) for node in self.nodes])
+        return f"MPO(n={self.n}, nodes=\n{nodes_str})"
+
+    def __getitem__(self, idx):
+        return self.nodes[idx]
+
+    def __setitem__(self, idx, value):
+        self.nodes[idx] = value
+
+    def get_linkdims(self):
+        linkdims = []
+        for node in self.nodes:
+            bond_indices = [idx for idx in node.tensor.indices if not idx.name.startswith("phys_")]
+            linkdims.append([idx.dim for idx in bond_indices])
+        dims = [1] + [dims[1] for dims in linkdims] + [1]
+        return dims
+
+    def mpo_to_matrix(self):
+        """
+        Converts the MPO to a full dense matrix.
+        """
+        n = self.n
+        d = self.d
+
+        tmp = torch.tensor([1.0], dtype=torch.float64)
+        res = torch.tensordot(self.nodes[-1].tensor.data, tmp, dims=([1], [0]))
+        for i in reversed(range(n - 1)):
+            res = torch.tensordot(self.nodes[i].tensor.data, res, dims=([1], [0]))
+        res = torch.tensordot(tmp, res, dims=([0], [0]))
+
+        perm = torch.cat([torch.arange(1, 2 * n, 2), torch.arange(0, 2 * n, 2)]).tolist()
+        res = res.permute(*perm).reshape(d ** n, d ** n)
+        return res
+
+    def compress(self, tol=1e-14, maxD=np.inf):
+        """
+        Simple MPO compression with QR + SVD, using Nodes.
+        """
+        n = self.n
+        res = []
+
+        # Left canonicalization via QR
+        for i in range(n - 1):
+            tensor_i = self.nodes[i].tensor
+            Dl, Dr, d1, d2 = tensor_i.data.shape
+            M = tensor_i.data.permute(0, 2, 3, 1).reshape(Dl * d1 * d2, Dr)
+            Q, R = torch.linalg.qr(M)
+            newD = Q.shape[1]
+            Q_tensor = Q.reshape(Dl, d1, d2, newD).permute(0, 3, 1, 2)
+
+            # Update indices
+            left_bond = tensor_i.indices[0]
+            phys_in, phys_out = tensor_i.indices[1], tensor_i.indices[2]
+            new_right_bond = Index(newD, name=tensor_i.indices[3].name)
+
+            res.append(Node(Tensor([left_bond, new_right_bond, phys_in, phys_out], Q_tensor)))
+
+            tensor_next = self.nodes[i + 1].tensor
+            next_R = torch.tensordot(R, tensor_next.data.reshape(Dr, -1), [[1], [0]]).reshape(newD, *tensor_next.data.shape[1:])
+            new_indices = [new_right_bond] + tensor_next.indices[1:]
+            self.nodes[i + 1] = Node(Tensor(new_indices, next_R))
+
+        res.append(self.nodes[-1])
+
+        # Right to left SVD truncation
+        for i in reversed(range(1, n)):
+            tensor_i = res[i].tensor
+            Dl, Dr, d1, d2 = tensor_i.data.shape
+            M = tensor_i.data.reshape(Dl, Dr * d1 * d2)
+            U, S, Vh = torch.linalg.svd(M, full_matrices=False)
+            keep = min(int((S.abs() > tol).sum().item()), maxD)
+            U, S, Vh = U[:, :keep], S[:keep], Vh[:keep, :]
+            V_tensor = Vh.reshape(keep, Dr, d1, d2)
+            new_right_bond = Index(keep, name=tensor_i.indices[1].name)
+            res[i] = Node(Tensor([new_right_bond, tensor_i.indices[1], tensor_i.indices[2], tensor_i.indices[3]], V_tensor))
+
+            B = U @ torch.diag(S)
+            prev_tensor = res[i - 1].tensor
+            C = torch.tensordot(prev_tensor.data, B, [[1], [0]])
+            new_indices = [prev_tensor.indices[0], Index(keep, name=prev_tensor.indices[1].name),
+                           prev_tensor.indices[2], prev_tensor.indices[3]]
+            res[i - 1] = Node(Tensor(new_indices, C.permute(0, 3, 1, 2)))
+
+        return MPO(n=self.n, d=self.d, nodes=res)
+
+    def add_mpo(self, mpo2):
+        """
+        Sum two MPOs. Assumes compatible structures.
+        """
+        assert self.n == mpo2.n
+        assert self.d == mpo2.d
+        d = self.d
+        n = self.n
+
+        res_nodes = []
+        for i in range(n):
+            t1 = self.nodes[i].tensor
+            t2 = mpo2.nodes[i].tensor
+
+            Dl1, Dr1 = t1.indices[0].dim, t1.indices[1].dim
+            Dl2, Dr2 = t2.indices[0].dim, t2.indices[1].dim
+
+            new_Dl, new_Dr = Dl1 + Dl2, Dr1 + Dr2
+
+            new_left_idx = Index(new_Dl, name=t1.indices[0].name)
+            new_right_idx = Index(new_Dr, name=t1.indices[1].name)
+            phys_in, phys_out = t1.indices[2], t1.indices[3]
+
+            new_tensor_data = torch.zeros((new_Dl, new_Dr, d, d), dtype=t1.data.dtype)
+
+            new_tensor_data[:Dl1, :Dr1, :, :] = t1.data
+            new_tensor_data[Dl1:, Dr1:, :, :] = t2.data
+
+            new_tensor = Tensor([new_left_idx, new_right_idx, phys_in, phys_out], new_tensor_data)
+            res_nodes.append(Node(new_tensor))
+
+        return MPO(n=n, d=d, nodes=res_nodes)
+
+class DMRG:
+    
+    def __init__(self, mpo : MPO, ttn : TTN, sweeps = 10, etol = 1e-14, maxD = np.inf, tol = 1e-14, compress = True, verbose = False):
+        
+        self.mpo = mpo
+        self.ttn = ttn 
+        self.sweeps = sweeps
+        self.etol = etol
+        self.maxD = maxD
+        self.tol = tol
+        self.compress = compress
+        self.verbose = verbose
+        self.N = self.mps.N
+        self.env = self._initialize_env()
+
+    def _initialize_env(self):
+        
+        env = [torch.tensor([[[1.0]]], dtype=torch.float64)] + [None for _ in range(self.N)] + [torch.tensor([[[1.0]]], dtype=torch.float64)]
+        for i in reversed(range(self.N)):
+            tmp = torch.tensordot(env[i + 2], self.mps[i], [[0], [1]])
+            tmp = torch.tensordot(tmp, self.mpo[i], [[0, 3], [1, 2]])
+            env[i + 1] = torch.tensordot(tmp, self.mps[i].conj(), [[0, 3], [1, 2]])
+        return env
+
+    def run(self):
+        
+        E_curr = 1e-16
+
+        for sweep in range(self.sweeps):
+            
+            E = self._sweep_lr(sweep)
+            E = self._sweep_rl(sweep)
+            frac_change = abs((E - E_curr) / E_curr)
+            E_curr = E
+
+            print(f"Sweep {sweep}, E = {E}")
+            if frac_change < self.etol:
+                print("Energy accuracy reached.")
+                return E_curr, self.mps
+
+        print("Maximum sweeps reached before reaching desired energy accuracy.")
+        return E_curr, self.mps
+
+    def _sweep_lr(self, sweep):
+        for i in range(self.N - 1):
+            Heff, dims = self._build_Heff(i)
+            evals, evecs = torch.linalg.eigh(Heff)
+            E = evals[0].item()
+            gs = evecs[:, 0]
+            self._update_mps(i, gs, dims)
+            self._update_env_left(i)
+            if self.verbose:
+                print(f"Sweep {sweep} L→R, site {i}, E = {E}")
+        return E
+
+    def _sweep_rl(self, sweep):
+        for i in reversed(range(self.N - 1)):
+            Heff, dims = self._build_Heff(i)
+            evals, evecs = torch.linalg.eigh(Heff)
+            E = evals[0].item()
+            gs = evecs[:, 0]
+            self._update_mps(i, gs, dims, right_to_left=True)
+            self._update_env_right(i)
+            if self.verbose:
+                print(f"Sweep {sweep} R→L, site {i}, E = {E}")
+        return E
+
+    def _build_Heff(self, i):
+        L = self.env[i]
+        R = self.env[i + 3]
+        W = torch.tensordot(self.mpo[i], self.mpo[i + 1], [[1], [0]])
+        LMW = torch.tensordot(L, W, [[1], [0]])
+        full = torch.tensordot(LMW, R, [[4], [1]])
+        full = full.permute(0, 2, 4, 6, 1, 3, 5, 7)
+        dims = full.shape
+        Heff = full.reshape(
+            dims[0] * dims[1] * dims[2] * dims[3],
+            dims[4] * dims[5] * dims[6] * dims[7]
+        )
+        return Heff, dims
+
+    def _update_mps(self, i, gs, dims, right_to_left=False):
+        gs = gs.reshape(dims[0] * dims[1], dims[2] * dims[3])
+        u, s, vh = torch.linalg.svd(gs, full_matrices=False)
+
+        if self.compress:
+            D = min((torch.abs(s) > self.tol).sum().item(), self.maxD)
+        else:
+            D = (torch.abs(s) > 1e-14).sum().item()
+
+        u, s, vh = u[:, :D], s[:D], vh[:D, :]
+
+        if not right_to_left:
+            left = u.reshape(dims[0], dims[1], D).permute(0, 2, 1)
+            vh = vh.reshape(D, dims[2], dims[3]).permute(0, 2, 1)
+            right = torch.tensordot(torch.diag(s), vh, [[1], [0]])
+            self.mps[i], self.mps[i + 1] = left, right
+        else:
+            u = u.reshape(dims[0], dims[1], D).permute(0, 2, 1)
+            left = torch.tensordot(u, torch.diag(s), [[1], [0]]).permute(0, 2, 1)
+            right = vh.reshape(D, dims[2], dims[3]).permute(0, 2, 1)
+            self.mps[i], self.mps[i + 1] = left, right
+
+    def _update_env_left(self, i):
+        tmp = torch.tensordot(self.env[i], self.mps[i], [[0], [0]])
+        tmp = torch.tensordot(tmp, self.mpo[i], [[0, 3], [0, 2]])
+        self.env[i + 1] = torch.tensordot(tmp, self.mps[i].conj(), [[0, 3], [0, 2]])
+
+    def _update_env_right(self, i):
+        tmp = torch.tensordot(self.env[i + 3], self.mps[i + 1], [[0], [1]])
+        tmp = torch.tensordot(tmp, self.mpo[i + 1], [[0, 3], [1, 2]])
+        self.env[i + 2] = torch.tensordot(tmp, self.mps[i + 1].conj(), [[0, 3], [1, 2]])
+ 
+
+def random_ttn(N, d, D, physical_indices = None):
     """
     Creates a binary TTN with `N` physical indices (must be power of 2).
 
@@ -540,3 +802,273 @@ def random_binary_ttn(N, d, D, physical_indices=None):
         current_nodes = next_nodes
 
     return TTN(nodes=nodes)
+
+def get_ising_mpo(n: int, J = -1.0, gx = 0, gz = 0, physical_indices = None) -> MPO:
+    
+    """
+    Build and return an MPO object for the 1D transverse field Ising model,
+    but now using Node/Tensor/Index structure.
+    """
+    
+    I = torch.eye(2, dtype=torch.float64)
+    x = torch.tensor([[0., 1.], [1., 0.]], dtype=torch.float64)
+    z = torch.tensor([[1., 0.], [0., -1.]], dtype=torch.float64)
+
+    D = 3
+    d = 2
+
+    # Define shared physical indices for all sites
+    if physical_indices == None:
+        phys_in = [Index(d, name=f"phys_{i}") for i in range(n)]
+        phys_out = [Index(d, name=f"phys_{i}'") for i in range(n)]
+    else:
+        phys_in = physical_indices
+        phys_out = list(map(lambda idx : idx.prime(), physical_indices))
+    
+    # Bond indices
+    bonds = [Index(D, name=f"bond_{i}") for i in range(1, n)]
+
+    nodes = []
+
+    # Left boundary
+    Dl, Dr = 1, D
+    bond_right = bonds[0]
+    indices = [Index(Dl, name="bond_0"), bond_right, phys_in[0], phys_out[0]]
+    W_left = torch.zeros(Dl, Dr, d, d, dtype=torch.float64)
+    W_left[0, 0] = gx * x + gz * z
+    W_left[0, 1] = J * z
+    W_left[0, 2] = I
+    tensor_left = Tensor(indices, W_left)
+    node_left = Node(tensor_left)
+    nodes.append(node_left)
+
+    # Bulk
+    for i in range(1, n - 1):
+        Dl, Dr = D, D
+        bond_left = bonds[i - 1]
+        bond_right = bonds[i]
+        indices = [bond_left, bond_right, phys_in[i], phys_out[i]]
+        W = torch.zeros(Dl, Dr, d, d, dtype=torch.float64)
+        W[0, 0] = I
+        W[1, 0] = z
+        W[2, 0] = gx * x + gz * z
+        W[2, 1] = J * z
+        W[2, 2] = I
+        tensor_bulk = Tensor(indices, W)
+        node_bulk = Node(tensor_bulk)
+        nodes.append(node_bulk)
+
+    # Right boundary
+    Dl, Dr = D, 1
+    bond_left = bonds[-1]
+    indices = [bond_left, Index(Dr, name=f"bond_{n}"), phys_in[n - 1], phys_out[n - 1]]
+    W_right = torch.zeros(Dl, Dr, d, d, dtype=torch.float64)
+    W_right[0, 0] = I
+    W_right[1, 0] = z
+    W_right[2, 0] = gx * x + gz * z
+    tensor_right = Tensor(indices, W_right)
+    node_right = Node(tensor_right)
+    nodes.append(node_right)
+
+    # Return MPO object (assuming now you have MPO that takes nodes)
+    
+    return MPO(n=n, d=d, nodes=nodes)
+
+def product_state_ttn(product_state, d, physical_indices = None):
+   
+    N = len(product_state) 
+   
+    assert (N & (N - 1)) == 0 and N > 0, "N must be a power of 2 and > 0"
+
+    # Create or reuse physical indices
+    if physical_indices is not None:
+        assert len(physical_indices) == N, "Provided physical_indices length must match N"
+        phys = physical_indices
+    else:
+        phys = [Index(d, name=f"phys_{i}") for i in range(N)]
+
+    nodes = []
+    current_nodes = []
+    current_layer = 0
+    node_id = 0
+
+    # Leaf layer
+    for i in range(0, N, 2):
+        bond = Index(1, name=f"bond_{node_id}")
+        data = torch.zeros(phys[i].dim, phys[i+1].dim, 1, dtype = torch.float64)
+        data[product_state[i], product_state[i+1], 0] = 1
+        tensor = Tensor([phys[i], phys[i + 1], bond], data = data)
+        node = Node(tensor, parents=[], children=[], name=node_id, layer=current_layer)
+        current_nodes.append(node)
+        nodes.append(node)
+        node_id += 1
+
+    # Internal layers
+    while len(current_nodes) > 1:
+        next_nodes = []
+        current_layer += 1
+
+        for i in range(0, len(current_nodes), 2):
+            left = current_nodes[i]
+            right = current_nodes[i + 1]
+
+            if len(current_nodes) == 2:
+                # This is the final layer — root node: only two bond indices
+                tensor = Tensor([left.tensor.indices[-1], right.tensor.indices[-1]], data = torch.ones(1, 1, dtype = torch.float64))
+            else:
+                bond = Index(1, name=f"bond_{node_id}")
+                tensor = Tensor([left.tensor.indices[-1], right.tensor.indices[-1], bond], data = torch.ones(1, 1, 1, dtype = torch.float64))
+
+            parent = Node(tensor, parents=[], children=[left, right], name=node_id, layer=current_layer)
+            left.parents.append(parent)
+            right.parents.append(parent)
+
+            next_nodes.append(parent)
+            nodes.append(parent)
+            node_id += 1
+
+        current_nodes = next_nodes
+
+    return TTN(nodes=nodes)
+  
+def get_two_site_mpo(n: int, site1, site2, op, physical_indices = None) -> MPO:
+    
+    """
+    Build and return an MPO object for the 1D transverse field Ising model,
+    but now using Node/Tensor/Index structure.
+    """
+    
+    I = torch.eye(2, dtype=torch.float64)
+
+    d = 2
+
+    # Define shared physical indices for all sites
+    if physical_indices == None:
+        phys_in = [Index(d, name=f"phys_{i}") for i in range(n)]
+        phys_out = [Index(d, name=f"phys_{i}'") for i in range(n)]
+    else:
+        phys_in = physical_indices
+        phys_out = list(map(lambda idx : idx.prime(), physical_indices))
+    
+    # Bond indices
+    bonds = [Index(1, name=f"bond_{i}") for i in range(1, n)]
+
+    nodes = []
+
+    # Left boundary
+    Dl, Dr = 1, 1
+    bond_right = bonds[0]
+    indices = [Index(Dl, name="bond_0"), bond_right, phys_in[0], phys_out[0]]
+    W_left = torch.zeros(Dl, Dr, d, d, dtype=torch.float64)
+    W_left[0, 0] = op if site1 == 0 else I
+    tensor_left = Tensor(indices, W_left)
+    node_left = Node(tensor_left)
+    nodes.append(node_left)
+
+    # Bulk
+    for i in range(1, n - 1):
+        Dl, Dr = 1, 1
+        bond_left = bonds[i - 1]
+        bond_right = bonds[i]
+        indices = [bond_left, bond_right, phys_in[i], phys_out[i]]
+        W = torch.zeros(Dl, Dr, d, d, dtype=torch.float64)
+        W[0, 0] = op if site1 == i or site2 == i else I
+        tensor_bulk = Tensor(indices, W)
+        node_bulk = Node(tensor_bulk)
+        nodes.append(node_bulk)
+
+    # Right boundary
+    Dl, Dr = 1, 1
+    bond_left = bonds[-1]
+    indices = [bond_left, Index(Dr, name=f"bond_{n}"), phys_in[n - 1], phys_out[n - 1]]
+    W_right = torch.zeros(Dl, Dr, d, d, dtype=torch.float64)
+    W_right[0, 0] = op if site2 == n-1 else I
+    tensor_right = Tensor(indices, W_right)
+    node_right = Node(tensor_right)
+    nodes.append(node_right)
+
+    # Return MPO object (assuming now you have MPO that takes nodes)
+    
+    return MPO(n=n, d=d, nodes=nodes)    
+
+def get_single_site_mpo(n: int, site1, op, physical_indices = None) -> MPO:
+    
+    """
+    Build and return an MPO object for the 1D transverse field Ising model,
+    but now using Node/Tensor/Index structure.
+    """
+    
+    I = torch.eye(2, dtype=torch.float64)
+
+    d = 2
+
+    # Define shared physical indices for all sites
+    if physical_indices == None:
+        phys_in = [Index(d, name=f"phys_{i}") for i in range(n)]
+        phys_out = [Index(d, name=f"phys_{i}'") for i in range(n)]
+    else:
+        phys_in = physical_indices
+        phys_out = list(map(lambda idx : idx.prime(), physical_indices))
+    
+    # Bond indices
+    bonds = [Index(1, name=f"bond_{i}") for i in range(1, n)]
+
+    nodes = []
+
+    # Left boundary
+    Dl, Dr = 1, 1
+    bond_right = bonds[0]
+    indices = [Index(Dl, name="bond_0"), bond_right, phys_in[0], phys_out[0]]
+    W_left = torch.zeros(Dl, Dr, d, d, dtype=torch.float64)
+    W_left[0, 0] = op if site1 == 0 else I
+    tensor_left = Tensor(indices, W_left)
+    node_left = Node(tensor_left)
+    nodes.append(node_left)
+
+    # Bulk
+    for i in range(1, n - 1):
+        Dl, Dr = 1, 1
+        bond_left = bonds[i - 1]
+        bond_right = bonds[i]
+        indices = [bond_left, bond_right, phys_in[i], phys_out[i]]
+        W = torch.zeros(Dl, Dr, d, d, dtype=torch.float64)
+        W[0, 0] = op if site1 == i else I
+        tensor_bulk = Tensor(indices, W)
+        node_bulk = Node(tensor_bulk)
+        nodes.append(node_bulk)
+
+    # Right boundary
+    Dl, Dr = 1, 1
+    bond_left = bonds[-1]
+    indices = [bond_left, Index(Dr, name=f"bond_{n}"), phys_in[n - 1], phys_out[n - 1]]
+    W_right = torch.zeros(Dl, Dr, d, d, dtype=torch.float64)
+    W_right[0, 0] = op if site1 == n-1 else I
+    tensor_right = Tensor(indices, W_right)
+    node_right = Node(tensor_right)
+    nodes.append(node_right)
+
+    # Return MPO object (assuming now you have MPO that takes nodes)
+    
+    return MPO(n=n, d=d, nodes=nodes)    
+
+
+if __name__ == "__main__":
+
+    depth = 3
+    N = 2**depth
+    d = 2
+    D = 1
+
+    # t1 = random_ttn(N, d, D).canonicalize(normalize = True)
+
+    product_state = [0]*N
+    t1 = product_state_ttn(product_state, d)
+
+    # t1.visualize()
+
+    # pi = t1.get_physical_indices()
+    # t2 = random_binary_ttn(N, d, D, pi)
+
+    mpo = get_ising_mpo(N, physical_indices = t1.get_physical_indices())
+
+    print(t1.expectation_value(mpo))

@@ -80,7 +80,7 @@ function contraction(A, c_A::Tuple, B, c_B::Tuple)::Array{ComplexF64}
     # NOTE: The order in which we give the uncontracted indices (in this case
     # they are in increasing order) affects the result of the final tensor. The
     # final tensor will have indices starting from A's indices in increasing
-    # ordera and then B's indices in increasing order. In addition c_A and c_B
+    # order and then B's indices in increasing order. In addition c_A and c_B
     # are expected to be given in such a way so that the first index of c_A is
     # to be contracted with the first index of c_B and so on. This assumption is
     # crucial for below, since we need the aforementioned specific order for

@@ -4,23 +4,26 @@ from typing import List, Optional, Callable
 
 class MPS:
     
-    def __init__(self, n: int, d: int, linkdims: List[int] = [], requires_grad: bool = False, tensors: List[torch.Tensor] = None):
+    def __init__(self, N: int, d: int, linkdims: List[int] = None, requires_grad: bool = False, tensors: List[torch.Tensor] = None):
         
         """
         Matrix Product State (MPS) initialization with random tensors.
 
         Args:
-            n (int): Number of sites.
+            N (int): Number of sites.
             d (int): Physical dimension.
-            linkdims (List[int]): Bond dimensions of length n+1.
+            linkdims (List[int]): Bond dimensions of length N+1.
             requires_grad (bool): Whether the tensors require gradients.
         """
         
-        self.n = n
+        self.N = N
         self.d = d
         self.requires_grad = requires_grad
         if tensors == None:
-            self.linkdims = linkdims
+            if linkdims == None:
+                self.linkdims = list(np.ones(N+1, dtype = np.int64))
+            else:
+                self.linkdims = linkdims
             self.tensors = self._initialize_random_mps()
             self.normalize()
         else:
@@ -30,7 +33,7 @@ class MPS:
     def _initialize_random_mps(self) -> List[torch.Tensor]:
         
         mps = []
-        for i in range(self.n):
+        for i in range(self.N):
             tensor = torch.rand(self.linkdims[i], self.linkdims[i + 1], self.d, dtype=torch.float64, requires_grad=self.requires_grad)
             mps.append(tensor)
         
@@ -56,12 +59,12 @@ class MPS:
         
         """Left-canonicalize the MPS using QR decomposition and normalize it."""
         
-        for i in range(self.n):
+        for i in range(self.N):
             A = self.tensors[i]
             Dl, Dr, d = A.shape
             tmp = A.permute(0, 2, 1).reshape(Dl * d, Dr)
             q, r = torch.linalg.qr(tmp)
-            if i < self.n - 1:
+            if i < self.N - 1:
                 self.tensors[i + 1] = torch.tensordot(r, self.tensors[i + 1], dims=([1], [0]))
             new_dim = q.shape[-1]
             self.tensors[i] = q.reshape(Dl, d, new_dim).permute(0, 2, 1)
@@ -72,12 +75,12 @@ class MPS:
 
     def __repr__(self):
         
-        return f"MPS(n={self.n}, d={self.d}, bond_dims={self.linkdims})"
+        return f"MPS(N={self.N}, d={self.d}, bond_dims={self.linkdims})"
     
     def compress(self, tol = 1e-14, maxD = np.inf):
         
         # Left canonical form up to penultimate site
-        for i in range(self.n-1):
+        for i in range(self.N-1):
             dims = self[i].shape
             tmp = self[i].permute(0, 2, 1).reshape(dims[0]*dims[2], dims[1])
             q, r = torch.linalg.qr(tmp)
@@ -85,7 +88,7 @@ class MPS:
             self[i] = q.reshape(dims[0], dims[2], q.shape[-1]).permute(0, 2, 1)
 
         # Right canonical form with truncation
-        for i in reversed(range(1, self.n)):
+        for i in reversed(range(1, self.N)):
             dims = self[i].shape
             tmp = self[i].reshape(dims[0], dims[1]*dims[2])
             u, s, vh = torch.linalg.svd(tmp, full_matrices=False)
@@ -103,7 +106,7 @@ class MPS:
         Calculate <self|other> inner product assuming same length.
         """
         
-        n = self.n
+        N = self.N
 
         dims1 = self.tensors[0].shape
         dims2 = other.tensors[0].shape
@@ -111,7 +114,7 @@ class MPS:
         res = torch.tensordot(self.tensors[0].conj().reshape(dims1[1], dims1[2]),
                               other.tensors[0].reshape(dims2[1], dims2[2]), [[1], [1]])
 
-        for i in range(1, n):
+        for i in range(1, N):
             res = torch.tensordot(res, other.tensors[i], [[1], [0]])
             res = torch.tensordot(res, self.tensors[i].conj(), [[0, 2], [0, 2]]).permute(1, 0)
 
@@ -131,19 +134,19 @@ class MPS:
         Put the MPS in mixed canonical form with orthogonality center at last_left.
         """
         
-        n = self.n
+        N = self.N
         mps = self.tensors.copy()
 
         # Left canonical for sites up to last_left
-        for i in range(min(last_left + 1, n-1)):
+        for i in range(min(last_left + 1, N-1)):
             dims = mps[i].shape
             tmp = mps[i].permute(0, 2, 1).reshape(dims[0]*dims[2], dims[1])
             q, r = torch.linalg.qr(tmp)
             mps[i] = q.reshape(dims[0], dims[2], q.shape[-1]).permute(0, 2, 1)
             mps[i+1] = torch.tensordot(r, mps[i+1], [[1], [0]])
 
-        # Right canonical for sites from n-1 down to last_left+1
-        for i in range(n-1, max(last_left+1, 0), -1):
+        # Right canonical for sites from N-1 down to last_left+1
+        for i in range(N-1, max(last_left+1, 0), -1):
             
             dims = mps[i].shape
             tmp = mps[i].reshape(dims[0], dims[1]*dims[2])
@@ -193,14 +196,14 @@ class MPS:
     
     def contract_with_mpo(self, mpo, tol = 1e-14, maxD = np.inf, compress = False):
         
-        n = self.n
+        N = self.N
         d = self.d
         res = []
 
         E = []
         tmp1 = torch.tensor([[[[1.0]]]], dtype=torch.float64)
 
-        for i in range(n - 1):
+        for i in range(N - 1):
             tmp2 = torch.tensordot(tmp1, self.tensors[i].conj(), [[0], [0]])
             tmp3 = torch.tensordot(tmp2, mpo.tensors[i].conj(), [[0, 4], [0, 2]])
             tmp4 = torch.tensordot(tmp3, mpo.tensors[i], [[0, 4], [0, 2]])
@@ -228,7 +231,7 @@ class MPS:
 
         C = torch.tensordot(lower_right_part, U.conj(), [[2], [1]])
 
-        for i in range(n - 2, 0, -1):
+        for i in range(N - 2, 0, -1):
             
             lower_middle_part = torch.tensordot(self.tensors[i].conj(), mpo.tensors[i].conj(), [[2], [2]])
             lower_part = torch.tensordot(lower_middle_part, C, [[1, 3], [0, 1]])
@@ -256,7 +259,7 @@ class MPS:
         mps0 = torch.tensordot(left_part, C, [[1, 2], [0, 1]])
         res.insert(0, mps0.permute(0, 2, 1))
         
-        return MPS(n, d, linkdims = get_linkdims(res), tensors = res)
+        return MPS(N, d, linkdims = get_linkdims(res), tensors = res)
     
     def get_expectation_value(self, mpo):
             
@@ -278,18 +281,18 @@ class MPS:
             
         return entropy.item()
 
-    def get_single_site_op_mpo(self, n, d, site, op):
+    def get_single_site_op_mpo(self, N, d, site, op):
         
         I = torch.eye(d, dtype=torch.float64)
         mpo = []
-        for i in range(n):
+        for i in range(N):
             site_op = op if i == site else I
             mpo_tensor = site_op.reshape(1, 1, d, d)
             mpo.append(mpo_tensor)
         
         return mpo
 
-    def get_single_site_op_sum_mpo(self, n, d, op):
+    def get_single_site_op_sum_mpo(self, N, d, op):
         
         I = torch.eye(d, dtype=torch.float64)
         mpo = []
@@ -299,7 +302,7 @@ class MPS:
         mpo.append(W0)
 
         # Middle sites
-        for _ in range(1, n - 1):
+        for _ in range(1, N - 1):
             W = torch.zeros((2, 2, d, d), dtype=torch.float64)
             W[0, 0] = I
             W[1, 0] = op
@@ -314,33 +317,33 @@ class MPS:
 
     def to_list(self):
         
-        n, d = self.n, self.d
+        N, d = self.N, self.d
                      
         res = self.tensors[0]
-        for i in range(1, n):
+        for i in range(1, N):
             res = torch.tensordot(res, self.tensors[i], [[-2], [0]])
             
-        return res.reshape(d**n).tolist()
+        return res.reshape(d**N).tolist()
 
 class MPO:
     
-    def __init__(self, n: int, d: int, builder_fn: Optional[Callable[[int], List[torch.Tensor]]] = None, tensors: Optional[List[torch.Tensor]] = None):
+    def __init__(self, N: int, d: int, builder_fn: Optional[Callable[[int], List[torch.Tensor]]] = None, tensors: Optional[List[torch.Tensor]] = None):
         
         """
         Matrix Product Operator (MPO) wrapper class.
 
         Args:
-            n (int): Number of sites.
+            N (int): Number of sites.
             builder_fn (Callable[[int], List[torch.Tensor]], optional): Function to build MPO tensors.
             tensors (List[torch.Tensor], optional): Predefined list of MPO tensors.
         """
         
-        self.n = n
+        self.N = N
         self.d = d
         if tensors is not None:
             self.tensors = tensors
         elif builder_fn is not None:
-            self.tensors = builder_fn(n)
+            self.tensors = builder_fn(N)
         else:
             raise ValueError("Either builder_fn or tensors must be provided.")
         self.linkdims = get_linkdims(tensors)
@@ -351,7 +354,7 @@ class MPO:
 
     def __repr__(self):
         
-        return f"MPO(n={self.n}, tensors={[t.shape for t in self.tensors]})"
+        return f"MPO(N={self.N}, tensors={[t.shape for t in self.tensors]})"
     
     def __getitem__(self, idx):
         
@@ -361,31 +364,31 @@ class MPO:
         
         self.tensors[idx] = value
     
-    def mpo_to_matrix(self):
+    def to_matrix(self):
         
-        n = self.n
+        N = self.N
         d = self.d
         tmp = torch.tensor([1.0], dtype=torch.float64)
 
         res = torch.tensordot(self.tensors[-1].to(dtype=torch.float64), tmp, dims=([1], [0]))
-        for i in reversed(range(n - 1)):
+        for i in reversed(range(N - 1)):
             res = torch.tensordot(self.tensors[i].to(dtype=torch.float64), res, dims=([1], [0]))
 
         res = torch.tensordot(tmp, res, dims=([0], [0]))
 
         # Permute to move physical indices to outermost positions
-        perm = torch.cat([torch.arange(1, 2 * n, 2), torch.arange(0, 2 * n, 2)]).tolist()
-        res = res.permute(*perm).reshape(d ** n, d ** n)
+        perm = torch.cat([torch.arange(1, 2 * N, 2), torch.arange(0, 2 * N, 2)]).tolist()
+        res = res.permute(*perm).reshape(d ** N, d ** N)
 
         return res
     
     def compress(self, tol = 1e-14, maxD = np.inf):
         
-        n = self.n
+        N = self.N
         res = []
 
         # Left canonicalization via QR
-        for i in range(n - 1):
+        for i in range(N - 1):
             
             Dl, Dr, d1, d2 = self[i].shape
             M = self[i].permute(0, 2, 3, 1).reshape(Dl * d1 * d1, Dr)
@@ -399,7 +402,7 @@ class MPO:
         res.append(self[-1])
 
         # Right to left SVD truncation
-        for i in reversed(range(1, n)):
+        for i in reversed(range(1, N)):
             
             Dl, Dr, d1, d2 = res[i].shape
             M = res[i].reshape(Dl, Dr * d1 * d2)
@@ -411,7 +414,7 @@ class MPO:
             C = torch.tensordot(res[i - 1], B, [[1], [0]])
             res[i - 1] = C.permute(0, 3, 1, 2)
 
-        return MPO(n = n, d = 2, tensors = res)
+        return MPO(N = N, d = 2, tensors = res)
     
 class DMRG:
     
@@ -425,13 +428,13 @@ class DMRG:
         self.tol = tol
         self.compress = compress
         self.verbose = verbose
-        self.n = self.mps.n
+        self.N = self.mps.N
         self.env = self._initialize_env()
 
     def _initialize_env(self):
         
-        env = [torch.tensor([[[1.0]]], dtype=torch.float64)] + [None for _ in range(self.n)] + [torch.tensor([[[1.0]]], dtype=torch.float64)]
-        for i in reversed(range(self.n)):
+        env = [torch.tensor([[[1.0]]], dtype=torch.float64)] + [None for _ in range(self.N)] + [torch.tensor([[[1.0]]], dtype=torch.float64)]
+        for i in reversed(range(self.N)):
             tmp = torch.tensordot(env[i + 2], self.mps[i], [[0], [1]])
             tmp = torch.tensordot(tmp, self.mpo[i], [[0, 3], [1, 2]])
             env[i + 1] = torch.tensordot(tmp, self.mps[i].conj(), [[0, 3], [1, 2]])
@@ -457,7 +460,7 @@ class DMRG:
         return E_curr, self.mps
 
     def _sweep_lr(self, sweep):
-        for i in range(self.n - 1):
+        for i in range(self.N - 1):
             Heff, dims = self._build_Heff(i)
             evals, evecs = torch.linalg.eigh(Heff)
             E = evals[0].item()
@@ -469,7 +472,7 @@ class DMRG:
         return E
 
     def _sweep_rl(self, sweep):
-        for i in reversed(range(self.n - 1)):
+        for i in reversed(range(self.N - 1)):
             Heff, dims = self._build_Heff(i)
             evals, evecs = torch.linalg.eigh(Heff)
             E = evals[0].item()
@@ -527,7 +530,7 @@ class DMRG:
         self.env[i + 2] = torch.tensordot(tmp, self.mps[i + 1].conj(), [[0, 3], [1, 2]])
 
 
-def get_ising_mpo(n: int, J=1.0, gx=1.0, gz=1.0) -> MPO:
+def get_ising_mpo(N: int, J=1.0, gx=1.0, gz=1.0) -> MPO:
     
     """
     Build and return an MPO object for the 1D transverse field Ising model.
@@ -557,27 +560,27 @@ def get_ising_mpo(n: int, J=1.0, gx=1.0, gz=1.0) -> MPO:
     W_right[1, 0] = z
     W_right[2, 0] = gx * x + gz * z
 
-    mpo_tensors = [W_left] + [W.clone() for _ in range(n - 2)] + [W_right]
+    mpo_tensors = [W_left] + [W.clone() for _ in range(N - 2)] + [W_right]
     
-    return MPO(n = n, d = 2, tensors=mpo_tensors)
+    return MPO(N = N, d = 2, tensors=mpo_tensors)
 
 def get_linkdims(tensors):
         
         linkdims = []
-        n = len(tensors)
-        for i in range(n-1):
+        N = len(tensors)
+        for i in range(N-1):
             linkdims.append(tensors[i].shape[1])
             
         return [1] + linkdims + [1]
 
 def add_mps(mps1, mps2, tol = 1e-14, maxD = np.inf, compress = False, normalize = False):
         
-        n = mps1.n
+        N = mps1.N
         d = mps1.d
         D1, D2 = mps1.linkdims, mps2.linkdims
                 
         res = []
-        for i in range(n):
+        for i in range(N):
             
             if i == 0:
                 
@@ -587,7 +590,7 @@ def add_mps(mps1, mps2, tol = 1e-14, maxD = np.inf, compress = False, normalize 
                 tmp[:, a:, :] = mps2[i]
                 res.append(tmp)
                 
-            elif i == n - 1:
+            elif i == N - 1:
                 
                 a, b = D1[i], D2[i]
                 tmp = torch.zeros(a + b, 1, d)
@@ -604,7 +607,7 @@ def add_mps(mps1, mps2, tol = 1e-14, maxD = np.inf, compress = False, normalize 
                 tmp[a_left:, a_right:, :] = mps2[i]
                 res.append(tmp)
         
-        res = MPS(n, d, get_linkdims(res), tensors = res)
+        res = MPS(N, d, get_linkdims(res), tensors = res)
         
         if normalize:
             res = res.normalize()
@@ -616,19 +619,19 @@ def add_mps(mps1, mps2, tol = 1e-14, maxD = np.inf, compress = False, normalize 
            
 def add_mpo(mpo1, mpo2):
     
-    n = mpo1.n
+    N = mpo1.N
     d = mpo1[0].shape[2]
     D1, D2 = get_linkdims(mpo1.tensors), get_linkdims(mpo2.tensors)
 
     res = []
-    for i in range(n):
+    for i in range(N):
         if i == 0:
             a, b = D1[i + 1], D2[i + 1]
             tmp = torch.zeros(1, a + b, d, d)
             tmp[:, :a, :, :] = mpo1[i]
             tmp[:, a:, :, :] = mpo2[i]
             res.append(tmp)
-        elif i == n - 1:
+        elif i == N - 1:
             a, b = D1[i], D2[i]
             tmp = torch.zeros(a + b, 1, d, d)
             tmp[:a, :, :, :] = mpo1[i]
@@ -642,5 +645,113 @@ def add_mpo(mpo1, mpo2):
             tmp[a_left:, a_right:, :, :] = mpo2[i]
             res.append(tmp)
 
-    return MPO(n = n, d = 2, tensors = res)           
+    return MPO(N = N, d = 2, tensors = res)           
 
+def get_rzz_mpo(site_1, site_2, N, theta):
+        
+    """
+    Construct an MPO that applies a controlled Rz(theta) operation between site_1 and site_2
+    where site_1 acts as the control (in Z basis), and Rz is applied at site_2.
+
+    Parameters:
+        site_1: int, first qubit (control) index
+        site_2: int, second qubit (target) index
+        N: total number of sites
+        theta: rotation angle
+
+    Returns:
+        MPO object with N tensors
+    """
+    
+    d = 2  # qubit system
+    I = torch.eye(d, dtype=torch.cdouble)
+    proj0 = torch.diag(torch.tensor([1, 0], dtype=torch.cdouble))
+    proj1 = torch.diag(torch.tensor([0, 1], dtype=torch.cdouble))
+    Rz = torch.diag(torch.tensor([np.exp(-1j * theta / 2), np.exp(1j * theta / 2)], dtype=torch.cdouble))
+    Rz_dag = torch.diag(torch.tensor([np.exp(1j * theta / 2), np.exp(-1j * theta / 2)], dtype=torch.cdouble))
+
+    tensors = []
+    for i in range(N):
+        if i < site_1 or i > site_2 - 1:
+            # Outside interaction region: identity MPO
+            W = I.reshape(1, 1, d, d).clone()
+        elif i == site_1:
+            # Control site: projects to |0⟩⟨0| and |1⟩⟨1|
+            W = torch.zeros((1, 2, d, d), dtype=torch.cdouble)
+            W[0, 0] = proj0
+            W[0, 1] = proj1
+        elif i == site_2:
+            # Target site: conditional Rz rotations depending on control
+            W = torch.zeros((2, 1, d, d), dtype=torch.cdouble)
+            W[0, 0] = Rz
+            W[1, 0] = Rz_dag
+        else:
+            # Inside the interaction region: Identity on both control paths
+            W = torch.zeros((2, 2, d, d), dtype=torch.cdouble)
+            W[0, 0] = I
+            W[1, 1] = I
+        tensors.append(W)
+
+    return MPO(N, d, tensors = tensors)
+    
+def get_two_site_mpo(N: int, site1: int, site2: int, op) -> List[torch.Tensor]:
+    
+    """
+    Create MPO for Z⊗Z operator on sites `site1` and `site2`.
+    
+    Args:
+        N (int): total number of sites
+        site1 (int): first site to apply Z (0-based)
+        site2 (int): second site to apply Z (0-based)
+
+    Returns:
+        List of torch.Tensor representing the MPO.
+    """
+        
+    d = op.shape[0]
+    I = torch.eye(d, dtype=torch.float64).reshape(1, 1, d, d)
+    
+    mpo = []
+
+    for i in range(N):
+        
+        if i == site1 or i == site2:
+            
+            mpo.append(op.reshape(1, 1, d, d))
+            
+        else:
+            
+            mpo.append(I)
+        
+    return MPO(N, d, tensors = mpo)
+
+def get_single_site_mpo(N: int, site1: int, op) -> List[torch.Tensor]:
+    
+    """
+    Create MPO for Z⊗Z operator on sites `site1` and `site2`.
+    
+    Args:
+        N (int): total number of sites
+        site1 (int): first site to apply Z (0-based)
+        site2 (int): second site to apply Z (0-based)
+
+    Returns:
+        List of torch.Tensor representing the MPO.
+    """
+        
+    d = op.shape[0]
+    I = torch.eye(d, dtype=torch.float64).reshape(1, 1, d, d)
+    
+    mpo = []
+
+    for i in range(N):
+        
+        if i == site1:
+            
+            mpo.append(op.reshape(1, 1, d, d))
+            
+        else:
+            
+            mpo.append(I)
+        
+    return MPO(N, d, tensors = mpo)
