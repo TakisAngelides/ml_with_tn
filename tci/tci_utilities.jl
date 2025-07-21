@@ -865,3 +865,42 @@ function mps_to_list(mps; reverse_flag = false)::Vector{promote_itensor_eltype(m
     return res
 
 end
+
+function decimal_to_padded_dinary_list(n, d, N)
+
+    """
+
+    Convert a non-negative decimal integer `n` into its fixed-length base-`d` representation (a "dinary").
+
+    The result is a vector of length `N`, representing the base-`d` digits of `n`, with the most significant digit first.
+    If `n` cannot be represented using `N` digits in base `d`, an error is thrown.
+
+    # Arguments
+    - `n::Int`: A non-negative integer to convert.
+    - `d::Int`: The base (must be at least 2).
+    - `N::Int`: The number of digits to output (must be large enough to represent `n` in base `d`).
+
+    # Returns
+    - `Vector{Int}`: A vector of `N` integers, each in the range `0` to `d-1`, representing `n` in base `d`.
+
+    # Example
+    ```julia
+    decimal_to_fixed_dinary(13, 3, 5) # returns [0, 0, 1, 1, 1]
+
+    """
+    
+    result = fill(0, N)
+    i = N
+
+    while n > 0 && i > 0
+        result[i] = n % d
+        n ÷= d
+        i -= 1
+    end
+
+    if n > 0
+        error("Number too large to fit in $N digits for base $d.")
+    end
+
+    return result
+end
