@@ -8,8 +8,8 @@ ITensors.disable_warn_order()
 let
 
     # Define parameters and perform TCI
-    N = 10
-    d = 25
+    N = 50
+    d = 2
     num_variables = 2
     min_grid = 0
     max_grid = pi/2
@@ -76,16 +76,7 @@ let
 
     # Get integration result
     res = integrate(mps, sites, d, N, num_variables)
-    # println(abs(res-pi^2/12))
     println(abs(res-2))
-
-    # Plot result
-    # mps_to_plot = mps_to_list(mps)
-    # p = plot()
-    # delta = (max_grid-min_grid)/(d^N-1)
-    # x_values = [min_grid + delta*i for i in 0:n-1]
-    # plot!(p, x_values, real(mps_to_plot))
-    # display(p)
     
     println("\nFinished.")
     
