@@ -281,7 +281,7 @@ def initialize_pivots_and_cache(func, min_grid, max_grid, d, N, num_starting_piv
     # Initialize with first random pivot
     for l in range(N):
         row_pivots[l].append(dinarys[0][:l])      # first l digits
-        col_pivots[l].append(dinarys[0][l:])      # last N-l digits
+        col_pivots[l].append(dinarys[0][l+1:])      # last N-l digits
 
     x, y = func(dinarys[0], min_grid, max_grid, d)
     func_cache[tuple(dinarys[0])] = (x, y)
