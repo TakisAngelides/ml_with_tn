@@ -3,7 +3,7 @@ using ITensors
 using Plots
 using Printf
 import Random
-Random.seed!(12345)
+Random.seed!(1234)
 
 function contraction(A, c_A::Tuple, B, c_B::Tuple)::Array{ComplexF64}
 
@@ -385,6 +385,7 @@ function initialize_pivots_and_cache(func, min_grid, max_grid, d, N, num_startin
     dinarys = []
     for _ in 1:num_starting_pivots
         random_dinary = [rand(1:d) for _ in 1:N]
+        println(random_dinary)
         push!(dinarys, random_dinary)
     end
 
@@ -668,17 +669,21 @@ end
 let
 
 # Define parameters and perform TCI
-N = 8
+N = 2
 d = 2
 min_grid = -10
 max_grid = 10
 tolerance = 1e-16
 max_pivots = 256
 sweeps = 100
-num_starting_pivots = 100
+num_starting_pivots = 1
 
 # Experiment with initializing pivots and mps list
 row_pivots, col_pivots, func_cache = initialize_pivots_and_cache(func, min_grid, max_grid, d, N, num_starting_pivots)
+
+println(row_pivots)
+println(col_pivots)
+
 mps_list, row_pivots, col_pivots = get_mps_from_pivots(row_pivots, col_pivots, min_grid, max_grid, d, N, func_cache, max_pivots, tolerance, func)
 
 # # Perform TCI

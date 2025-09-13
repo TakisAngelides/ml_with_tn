@@ -324,6 +324,19 @@ class MPS:
             res = torch.tensordot(res, self.tensors[i], [[-2], [0]])
             
         return res.reshape(d**N).tolist()
+    
+    def contract_bonds(self):
+        
+        N, d = self.N, self.d
+                     
+        res = self.tensors[0]
+        for i in range(1, N):
+            res = torch.tensordot(res, self.tensors[i], [[-2], [0]])
+        
+        order = np.arange(0, len(res.shape))
+        order[-2], order[-1] = order[-1], order[-2]
+        
+        return res.permute(*order)
 
 class MPO:
     
