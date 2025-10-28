@@ -134,7 +134,6 @@ class MPS(torch.nn.Module):
                         
                 return MPS(self.n, d, linkdims, tensors = res, requires_grad = requires_grad)
 
-
     def __repr__(self):
         
         return f"MPS(n={self.n}, d={self.d}, bond_dims={self.linkdims})"
@@ -198,7 +197,7 @@ class MPS(torch.nn.Module):
         
         return torch.sqrt(self.inner(self))
     
-    def contract_with_mpo(self, mpo, tol = 1e-14, maxD = np.infty, compress = False, requires_grad = False):
+    def contract_with_mpo(self, mpo, tol = 1e-14, maxD = np.inf, compress = False, requires_grad = False):
         
         n = self.n
         d = self.d
@@ -482,13 +481,12 @@ n_epochs = 100
 tol = 1e-11  # Convergence tolerance for loss
 ising_mpo = get_ising_mpo(n, J=1.0, gx=0.2, gz=0.1)
 
-linkdims = [1] + [2 for _ in range(n-1)] + [1]
+linkdims = [1] + [8 for _ in range(n-1)] + [1]
 mps = MPS(n = n, d = 2, linkdims = linkdims, requires_grad = True)
 
 def loss_fn():
     
-    # energy = mps.get_expectation_value(ising_mpo)
-    energy = checkpoint(mps.get_expectation_value, ising_mpo)
+    energy = mps.get_expectation_value(ising_mpo)
     norm = mps.inner(mps)
     loss = energy / norm
     
@@ -510,8 +508,8 @@ for epoch in range(n_epochs):
 
     loss = optimizer.step(closure)
     
-    if epoch % 1 == 0:
-        print(f"Epoch {epoch+1}: Energy = {loss.item()}")
+    if epoch % 10 == 0:
+        print(f"Epoch {epoch+1}: Energy = {loss.item()}, Ranks = {get_linkdims(mps.tensors)}")
 
     # Early stopping condition
     if abs(prev_loss - loss.item()) < tol and epoch > 50:
@@ -521,7 +519,7 @@ for epoch in range(n_epochs):
     prev_loss = loss.item()
 
 mps = mps.normalize(requires_grad = False) 
-print('Trained mps expectation value with ising mpo:', mps.get_expectation_value(ising_mpo))
+print('Trained mps expectation value with ising mpo:', mps.get_expectation_value(ising_mpo).item())
 
 mps = MPS(n, d, linkdims)
 
