@@ -6,3 +6,5 @@ tci_old
 mnist
 __pycache__
 tci_guide*
+.DS_Store
+.ipynb_checkpoints
