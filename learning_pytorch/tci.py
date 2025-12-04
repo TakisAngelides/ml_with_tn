@@ -72,8 +72,8 @@ def func(dinary, min_grid, max_grid, d):
         x_i = min_grid[i] + decimal_value * delta
         x_vec.append(x_i)
 
-    # y = sum((math.sin(5*x) + 0.5 * math.cos(3*x**2)) * math.exp(-0.1*x**2) + math.atan(x)/5 + 0.1 * x * math.cos(x) for x in x_vec)
-    y = sum(math.cos(x) for x in x_vec)
+    y = sum((math.sin(5*x) + 0.5 * math.cos(3*x**2)) * math.exp(-0.1*x**2) + math.atan(x)/5 + 0.1 * x * math.cos(x) for x in x_vec)
+    # y = sum(math.cos(x) for x in x_vec)
 
     return x_vec, y
 
@@ -111,6 +111,7 @@ def lu_full_pivoting(A, max_pivots, tolerance, all_rows, all_cols):
     pivot_error = 0
 
     while pivots < max_rank:
+
         # Extract submatrix for pivot search
         submatrix = U[col:, col:]
         abs_sq = torch.abs(submatrix) ** 2
@@ -287,17 +288,23 @@ def initialize_pivots_and_cache(func, min_grid, max_grid, d, N, num_starting_piv
     func_cache[tuple(dinarys[0])] = (x, y)
 
     for i in range(1, num_starting_pivots):
+        
         dinary = dinarys[i]
+
+        key = tuple(dinary)
+
+        if key not in func_cache:
+            x, y = func(dinary, min_grid, max_grid, d)
+            func_cache[key] = (x, y)
+        else:
+            continue
+
         for l in range(N):
             if l != 0:
                 row_pivots[l].append(dinary[:l])
             if l != N-1:
                 col_pivots[l].append(dinary[l+1:])
-        key = tuple(dinary)
-        if key not in func_cache:
-            x, y = func(dinary, min_grid, max_grid, d)
-            func_cache[key] = (x, y)
-
+        
     return row_pivots, col_pivots, func_cache
 
 def get_mps_from_pivots(row_pivots, col_pivots, min_grid, max_grid, d, N, func_cache, max_pivots, tolerance, func):
@@ -529,32 +536,49 @@ def tci(N, func, min_grid, max_grid, tolerance, max_pivots, sweeps, d, func_cach
 
 
 # Define parameters and perform TCI
-N = 8
+N = 5
 d = 2
 min_grid = [-10]
 max_grid = [10]
 tolerance = 1e-16
 max_pivots = 256
 sweeps = 100
-num_starting_pivots = 100
+num_starting_pivots = 3
 
 # Experiment with initializing pivots and mps list
 row_pivots, col_pivots, func_cache = initialize_pivots_and_cache(func, min_grid, max_grid, d, N, num_starting_pivots)
+
+for i in range(1):
+    print(f"Site {i}:")
+    print(f"Row pivots: {row_pivots[i+1]}")
+    print(f"Col pivots: {col_pivots[i]}")
+
 mps_list, row_pivots, col_pivots = get_mps_from_pivots(row_pivots, col_pivots, min_grid, max_grid, d, N, func_cache, max_pivots, tolerance, func)
 
-# Perform TCI
-mps_list, pivot_error_list, func_cache, sweep, bonddims = tci(N, func, min_grid, max_grid, tolerance, max_pivots, sweeps, d, func_cache, row_pivots, col_pivots, mps_list)
+for i in range(1):
+    print(f"Site {i}:")
+    print(f"Row pivots: {row_pivots[i+1]}")
+    print(f"Col pivots: {col_pivots[i]}")
 
-# Plot the results
-x_val = [v[0][0] for v in func_cache.values()]
-y_val = [np.real(v[1]) for v in func_cache.values()]
+# # Perform TCI
+# mps_list, pivot_error_list, func_cache, sweep, bonddims = tci(N, func, min_grid, max_grid, tolerance, max_pivots, sweeps, d, func_cache, row_pivots, col_pivots, mps_list)
 
-mps_vec = mps_list_to_custom_mps(d, N, mps_list).to_list()
+# for i in range(len(row_pivots)-1):
+#     print(f"Site {i}:")
+#     print(f"Row pivots: {row_pivots[i+1]}")
+#     print(f"Col pivots: {col_pivots[i]}")
 
-delta = (max_grid[0]-min_grid[0])/(d**N-1)
-x_values = [min_grid[0] + delta*i for i in range(d**N)]
-y_values = [np.real(func(decimal_to_fixed_dinary(i, d, N), min_grid, max_grid, d)[1]) for i in range(d**N)] 
-plt.scatter(x_val, y_val, c = 'black')
-plt.plot(x_values, y_values, c = 'red')
-plt.plot(x_values, np.real(mps_vec), c = 'blue', linestyle = '--')
-plt.show()
+# # Plot the results
+# x_val = [v[0][0] for v in func_cache.values()]
+# y_val = [np.real(v[1]) for v in func_cache.values()]
+
+# mps_vec = mps_list_to_custom_mps(d, N, mps_list).to_list()
+
+# delta = (max_grid[0]-min_grid[0])/(d**N-1)
+# x_values = [min_grid[0] + delta*i for i in range(d**N)]
+# y_values = [np.real(func(decimal_to_fixed_dinary(i, d, N), min_grid, max_grid, d)[1]) for i in range(d**N)] 
+# plt.scatter(x_val, y_val, c = 'black', label = 'Sampled Points')
+# plt.plot(x_values, y_values, c = 'red', label = 'Target Function')
+# plt.plot(x_values, np.real(mps_vec), c = 'blue', linestyle = '--', label = 'MPS Approximation')
+# plt.legend()
+# plt.show()
